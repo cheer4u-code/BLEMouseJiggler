@@ -60,15 +60,15 @@ class TimerContainer {
 };
 
 class WatchdogTimer : public Timer {
-  protected:
-    virtual void _setup() {
-      timeout = WATCHDOG_TIMEOUT;
-      rp2040.wdt_begin(timeout*2);      
-    }
-    virtual void _run() {
-      // Serial.println("Watchdog updates");
-      rp2040.wdt_reset();
-    }
+ protected:
+  virtual void _setup() {
+    timeout = WATCHDOG_TIMEOUT;
+    rp2040.wdt_begin(timeout*2);      
+  }
+  virtual void _run() {
+    // Serial.println("Watchdog updates");
+    rp2040.wdt_reset();
+  }
 };
 
 // onboard-led blink timer
@@ -108,41 +108,33 @@ class LedTimer : public Timer {
 
 class JiggleTimer : public Timer {
  public:
-  JiggleTimer(LedTimer* led) {
-    this->led = led;
+  void start() {
+    timeout = 1;
+    times = random(2, 5);
+    Serial.printf("Start Jiggle (times=%d)\n", times);
   }
  protected:
   virtual void _setup() {
-    timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);
-    times = 0;
-    long_sleep = true;    
+    timeout = 0;
+    times = 0;   
   }
   virtual void _run() {
     bool connected = PicoBluetoothBLEHID.connected();
     if (!connected) {
       Serial.println("Jiggle is skipped because bluetooth is disconnected");
-      timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);;
+      timeout = 0;
       times = 0;
-      long_sleep = true;
       return;
     }
-    if (long_sleep) {
-      long_sleep = false;
-      times = random(2, 5);
-      timeout = random_timeout(12);
-      led->blink(2);
-      Serial.printf("Start Jiggle (times=%d)\n", times);
-    }
-    else if (--times > 0) {
-      Serial.printf("Jiggle (times=%d)\n", times);
+    if (--times > 0) {
       timeout = random_timeout(12);
     }
     else {
-      timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);
-      long_sleep = true;
+      timeout = 0;
     }
     long x = random(-10, 10);
     long y = random(-10, 10);
+    Serial.printf("Jiggle (%ld, %ld)\n", x, y);
     MouseBLE.move(x, y, 0);
   }
  private:
@@ -150,8 +142,29 @@ class JiggleTimer : public Timer {
     return random(t/2, t);
   }
   unsigned int times;
-  bool long_sleep;
+};
+
+class JiggleIntervalTimer : public Timer {
+ public:
+  JiggleIntervalTimer(LedTimer* led, JiggleTimer* jiggle) {
+    this->jiggle = jiggle;
+    this->led = led;
+  }
+ protected:
+  virtual void _setup() {
+    timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);
+  }
+  virtual void _run() {
+    timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);
+    led->blink(2);
+    jiggle->start();
+  }
+ private:
+  unsigned long random_timeout(unsigned t) {
+    return random(t/2, t);
+  }
   LedTimer* led;
+  JiggleTimer *jiggle;
 };
 
 // https://github.com/raspberrypi/pico-examples/blob/master/adc/read_vsys/power_status.c
@@ -238,7 +251,9 @@ void setup() {
   timer.add(new WatchdogTimer());
   LedTimer* led = new LedTimer();
   timer.add(led);
-  timer.add(new JiggleTimer(led));
+  JiggleTimer* jiggle = new JiggleTimer();
+  timer.add(jiggle);
+  timer.add(new JiggleIntervalTimer(led, jiggle));
   timer.add(new CheckBatteryTimer());
   timer.setup();
   Serial.println("Start Mouse Jiggle");
