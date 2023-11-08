@@ -20,8 +20,9 @@
 
 // soft timer
 class Timer {
- public:
-  Timer() : last_time(0) {}
+public:
+  Timer()
+    : last_time(0) {}
   void setup() {
     _setup();
   }
@@ -32,38 +33,38 @@ class Timer {
       _run();
     }
   }
- protected:
+protected:
   virtual void _setup() = 0;
   virtual void _run() = 0;
   unsigned long timeout;
- private:
+private:
   unsigned long last_time;
 };
 
 class TimerContainer {
- public:
+public:
   void add(Timer* t) {
     container.push_back(t);
   }
   void setup() {
     for (Timer* t : container) {
       t->setup();
-    }    
+    }
   }
   void run() {
     for (Timer* t : container) {
       t->run();
     }
   }
- private:
+private:
   std::vector<Timer*> container;
 };
 
 class WatchdogTimer : public Timer {
- protected:
+protected:
   virtual void _setup() {
     timeout = WATCHDOG_TIMEOUT;
-    rp2040.wdt_begin(timeout*2);      
+    rp2040.wdt_begin(timeout * 2);
   }
   virtual void _run() {
     // Serial.println("Watchdog updates");
@@ -73,15 +74,15 @@ class WatchdogTimer : public Timer {
 
 // onboard-led blink timer
 class LedTimer : public Timer {
- public:
+public:
   void blink(unsigned int times) {
     Serial.printf("Start Led blink (times=%d)\n", times);
     if (times > 0) {
       timeout = 1;
-      this->times = times * 2; 
+      this->times = times * 2;
     }
   }
- protected:
+protected:
   virtual void _setup() {
     timeout = 0;
     pinMode(LED_BUILTIN, OUTPUT);
@@ -96,8 +97,7 @@ class LedTimer : public Timer {
       digitalWrite(LED_BUILTIN, led_on);
       if (times == 0) {
         timeout = 0;
-      }
-      else {
+      } else {
         timeout = LED_OFF_TIME;
       }
     }
@@ -107,16 +107,16 @@ class LedTimer : public Timer {
 };
 
 class JiggleTimer : public Timer {
- public:
+public:
   void start() {
     timeout = 1;
     times = random(2, 5);
     Serial.printf("Start Jiggle (times=%d)\n", times);
   }
- protected:
+protected:
   virtual void _setup() {
     timeout = 0;
-    times = 0;   
+    times = 0;
   }
   virtual void _run() {
     bool connected = PicoBluetoothBLEHID.connected();
@@ -128,8 +128,7 @@ class JiggleTimer : public Timer {
     }
     if (--times > 0) {
       timeout = random_timeout(12);
-    }
-    else {
+    } else {
       timeout = 0;
     }
     long x = random(-10, 10);
@@ -137,20 +136,20 @@ class JiggleTimer : public Timer {
     Serial.printf("Jiggle (%ld, %ld)\n", x, y);
     MouseBLE.move(x, y, 0);
   }
- private:
+private:
   unsigned long random_timeout(unsigned t) {
-    return random(t/2, t);
+    return random(t / 2, t);
   }
   unsigned int times;
 };
 
 class JiggleIntervalTimer : public Timer {
- public:
+public:
   JiggleIntervalTimer(LedTimer* led, JiggleTimer* jiggle) {
     this->jiggle = jiggle;
     this->led = led;
   }
- protected:
+protected:
   virtual void _setup() {
     timeout = random_timeout(JIGGLE_TIMEOUT_HIGH);
   }
@@ -159,12 +158,12 @@ class JiggleIntervalTimer : public Timer {
     led->blink(2);
     jiggle->start();
   }
- private:
+private:
   unsigned long random_timeout(unsigned t) {
-    return random(t/2, t);
+    return random(t / 2, t);
   }
   LedTimer* led;
-  JiggleTimer *jiggle;
+  JiggleTimer* jiggle;
 };
 
 // https://github.com/raspberrypi/pico-examples/blob/master/adc/read_vsys/power_status.c
@@ -173,7 +172,7 @@ class JiggleIntervalTimer : public Timer {
 #define PICO_FIRST_ADC_PIN 26
 
 class CheckBatteryTimer : public Timer {
- protected:
+protected:
   virtual void _setup() {
     timeout = 1;
   }
@@ -181,7 +180,7 @@ class CheckBatteryTimer : public Timer {
     timeout = 60000;
     check_battery();
   }
- private:
+private:
   void check_battery() {
     bool powered = cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN);
 
@@ -192,21 +191,21 @@ class CheckBatteryTimer : public Timer {
     // setup adc
     adc_gpio_init(PICO_VSYS_PIN);
     adc_select_input(PICO_VSYS_PIN - PICO_FIRST_ADC_PIN);
- 
+
     adc_fifo_setup(true, false, 0, false, false);
     adc_run(true);
 
     // We seem to read low values initially - this seems to fix it
     int ignore_count = PICO_POWER_SAMPLE_COUNT;
     while (!adc_fifo_is_empty() || ignore_count-- > 0) {
-        (void)adc_fifo_get_blocking();
+      (void)adc_fifo_get_blocking();
     }
 
     // read vsys
     uint32_t vsys = 0;
-    for(int i = 0; i < PICO_POWER_SAMPLE_COUNT; i++) {
-        uint16_t val = adc_fifo_get_blocking();
-        vsys += val;
+    for (int i = 0; i < PICO_POWER_SAMPLE_COUNT; i++) {
+      uint16_t val = adc_fifo_get_blocking();
+      vsys += val;
     }
 
     adc_run(false);
@@ -215,20 +214,20 @@ class CheckBatteryTimer : public Timer {
     vsys /= PICO_POWER_SAMPLE_COUNT;
 
     cyw43_thread_exit();
-    
+
     const float conversion_factor = 3.3f / (1 << 12);
     float voltage = vsys * 3 * conversion_factor;
 
     float percent = 0;
     if (voltage > 1.8) {
-      percent = (voltage-1.8)*100/(5.5-1.8);
+      percent = (voltage - 1.8) * 100 / (5.5 - 1.8);
     }
 
     Serial.printf("%s (voltage %.1fv, %.1f%%)\n",
                   powered ? "Powered" : "Battery",
                   voltage,
                   percent);
-    
+
     MouseBLE.setBattery(percent);
   }
 };
@@ -241,7 +240,7 @@ void setup() {
   Serial.begin(115200);
   MouseBLE.begin("Mouse");
   delay(5000);
-  
+
   // if analog input pin A0 is unconnected, random analog
   // noise will cause the call to randomSeed() to generate
   // different seed numbers each time the sketch runs.
