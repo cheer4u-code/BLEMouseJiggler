@@ -18,6 +18,8 @@
 #define LED_OFF_TIME 500
 #define JIGGLE_TIMEOUT_HIGH 240000
 
+#define random_timeout(t) random(t / 2, t)
+
 // soft timer
 class Timer {
 public:
@@ -58,6 +60,49 @@ public:
   }
 private:
   std::vector<Timer*> container;
+};
+
+class Button {
+public:
+  Button()
+    : key_down(false), btn_timeout(200), last_time(0) {}
+  void run(unsigned long curr) {
+    if (_keydown()) {
+      if (!key_down && (curr - last_time) > btn_timeout) {
+        key_down = true;
+      }
+    } else {
+      if (key_down) {
+        // key up
+        key_down = false;
+        _tap();
+      }
+      last_time = curr;
+    }
+  }
+protected:
+  virtual bool _keydown() = 0;
+  virtual void _tap() = 0;
+private:
+  std::vector<Button*> container;
+  bool key_down;
+  unsigned long btn_timeout;
+  unsigned long last_time;
+};
+
+class ButtonContainer {
+public:
+  void add(Button* t) {
+    container.push_back(t);
+  }
+  void run() {
+    unsigned long curr = millis();
+    for (Button* b : container) {
+      b->run(curr);
+    }
+  }
+private:
+  std::vector<Button*> container;
 };
 
 class WatchdogTimer : public Timer {
@@ -137,13 +182,10 @@ protected:
     MouseBLE.move(x, y, 0);
   }
 private:
-  unsigned long random_timeout(unsigned t) {
-    return random(t / 2, t);
-  }
   unsigned int times;
 };
 
-class JiggleIntervalTimer : public Timer {
+class JiggleIntervalTimer : public Timer, public Button {
 public:
   JiggleIntervalTimer(LedTimer* led, JiggleTimer* jiggle) {
     this->jiggle = jiggle;
@@ -158,10 +200,13 @@ protected:
     led->blink(2);
     jiggle->start();
   }
-private:
-  unsigned long random_timeout(unsigned t) {
-    return random(t / 2, t);
+  virtual bool _keydown() {
+    return BOOTSEL;
   }
+  virtual void _tap() {
+    timeout = 1;
+  }
+private:
   LedTimer* led;
   JiggleTimer* jiggle;
 };
@@ -234,6 +279,7 @@ private:
 
 
 TimerContainer timer;
+ButtonContainer key;
 
 
 void setup() {
@@ -252,9 +298,11 @@ void setup() {
   timer.add(led);
   JiggleTimer* jiggle = new JiggleTimer();
   timer.add(jiggle);
-  timer.add(new JiggleIntervalTimer(led, jiggle));
+  JiggleIntervalTimer* jiggle_interval = new JiggleIntervalTimer(led, jiggle);
+  timer.add(jiggle_interval);
   timer.add(new CheckBatteryTimer());
   timer.setup();
+  key.add(jiggle_interval);
   Serial.println("Start Mouse Jiggle");
 
   led->blink(3);
@@ -262,4 +310,5 @@ void setup() {
 
 void loop() {
   timer.run();
+  key.run();
 }
