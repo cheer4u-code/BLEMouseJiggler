@@ -68,20 +68,22 @@ private:
 class Button {
 public:
   Button()
-    : key_down(false), timeout(200), last_time(0) {}
+    : key_down(0), timeout(200), last_time(0) {}
   void setup() {
     _setup();
   }
   void run(unsigned long curr) {
     if (_keydown()) {
-      if (!key_down && (curr - last_time) > timeout) {
-        key_down = true;
+      if ((curr - last_time) > timeout) {
+        key_down++;
+        timeout += 200;
       }
     } else {
-      if (key_down) {
+      if (key_down > 0) {
         // key up
-        key_down = false;
-        _run();
+        _run(key_down);
+        timeout = 200;
+        key_down = 0;
       }
       last_time = curr;
     }
@@ -89,10 +91,9 @@ public:
 protected:
   virtual void _setup() = 0;
   virtual bool _keydown() = 0;
-  virtual void _run() = 0;
+  virtual void _run(unsigned int key_down) = 0;
 private:
-  std::vector<Button*> container;
-  bool key_down;
+  unsigned int key_down;
   unsigned long timeout;
   unsigned long last_time;
 };
@@ -294,8 +295,14 @@ protected:
   virtual bool _keydown() {
     return BOOTSEL;
   }
-  virtual void _run() {
-    jiggle_interval->run_now();
+  virtual void _run(unsigned int key_down) {
+    Serial.printf("Bootsel button pressed (%.dms)\n", key_down * 200);
+    if (key_down >= 25) {
+      Serial.flush();
+      rp2040.rebootToBootloader();
+    } else {
+      jiggle_interval->run_now();
+    }
   }
 private:
   JiggleIntervalTimer* jiggle_interval;
