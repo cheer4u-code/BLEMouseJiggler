@@ -1,9 +1,5 @@
-/* Pico W Bluetooth Mouse Jiggler */
 /*
- * Board: "Raspberry Pi Pico W"
- * Debug Port: "Serial"
- * USB Stack: "Adafruit TinyUSB"
- * IP/Bluetooth Stack: "IPv4 + Bluetooth"
+ * Pico W Bluetooth Mouse Jiggler
  */
 
 #include <boards/pico_w.h>
@@ -19,20 +15,30 @@
 #define JIGGLE_TIMEOUT_HIGH 240000
 #define CHECKBATTERY_TIMEOUT 60000
 
+// 50%: 3.65v, 40%: 3.28v, 30%: 2.91v, 20%: 2.54v, 10%: 2.17v, 5%: 1.99v
+#define HIGH_VOLTAGE 5.5
+#define LOW_VOLTAGE 1.8
+
 #define RUN_NOW 1
+
+#define BUTTON_TIMEOUT 100
 
 #define random_timeout(t) random(t / 2, t)
 
-// soft timer
-class Timer {
+class Event {
+public:
+  virtual void setup() = 0;
+  virtual void run(unsigned long curr) = 0;
+};
+
+class Timer : public Event {
 public:
   Timer()
     : timeout(0), last_time(0) {}
-  void setup() {
+  virtual void setup() {
     _setup();
   }
-  void run() {
-    unsigned long curr = millis();
+  virtual void run(unsigned long curr) {
     if (timeout > 0 && (curr - last_time) > timeout) {
       last_time = curr;
       _run();
@@ -46,43 +52,24 @@ private:
   unsigned long last_time;
 };
 
-class TimerContainer {
-public:
-  void add(Timer* t) {
-    container.push_back(t);
-  }
-  void setup() {
-    for (Timer* t : container) {
-      t->setup();
-    }
-  }
-  void run() {
-    for (Timer* t : container) {
-      t->run();
-    }
-  }
-private:
-  std::vector<Timer*> container;
-};
-
-class Button {
+class Button : public Event {
 public:
   Button()
-    : key_down(0), timeout(200), last_time(0) {}
-  void setup() {
+    : key_down(0), timeout(BUTTON_TIMEOUT), last_time(0) {}
+  virtual void setup() {
     _setup();
   }
-  void run(unsigned long curr) {
+  virtual void run(unsigned long curr) {
     if (_keydown()) {
       if ((curr - last_time) > timeout) {
         key_down++;
-        timeout += 200;
+        timeout += BUTTON_TIMEOUT;
       }
     } else {
       if (key_down > 0) {
         // key up
         _run(key_down);
-        timeout = 200;
+        timeout = BUTTON_TIMEOUT;
         key_down = 0;
       }
       last_time = curr;
@@ -98,24 +85,24 @@ private:
   unsigned long last_time;
 };
 
-class ButtonContainer {
+class EventContainer {
 public:
-  void add(Button* t) {
+  void add(Event* t) {
     container.push_back(t);
   }
   void setup() {
-    for (Button* b : container) {
-      b->setup();
+    for (Event* t : container) {
+      t->setup();
     }
   }
   void run() {
     unsigned long curr = millis();
-    for (Button* b : container) {
-      b->run(curr);
+    for (Event* t : container) {
+      t->run(curr);
     }
   }
 private:
-  std::vector<Button*> container;
+  std::vector<Event*> container;
 };
 
 class WatchdogTimer : public Timer {
@@ -273,8 +260,10 @@ private:
 
     float percent = 0;
     if (voltage > 1.8) {
-      // 50%: 3.65v, 40%: 3.28v, 30%: 2.91v, 20%: 2.54v, 10%: 2.17v, 5%: 1.99v
-      percent = (voltage - 1.8) * 100 / (5.5 - 1.8);
+      percent = (voltage - LOW_VOLTAGE) * 100 / (HIGH_VOLTAGE - LOW_VOLTAGE);
+    }
+    if (percent > 100.0) {
+      percent = 100.0;
     }
 
     Serial.printf("%s (voltage %.1fv, %.1f%%)\n",
@@ -296,8 +285,8 @@ protected:
     return BOOTSEL;
   }
   virtual void _run(unsigned int key_down) {
-    Serial.printf("Bootsel button pressed (%.dms)\n", key_down * 200);
-    if (key_down >= 25) {
+    Serial.printf("Bootsel button pressed (%.dms)\n", key_down * BUTTON_TIMEOUT);
+    if (key_down >= (5000 / BUTTON_TIMEOUT)) {
       Serial.flush();
       rp2040.rebootToBootloader();
     } else {
@@ -309,8 +298,7 @@ private:
 };
 
 
-TimerContainer timer;
-ButtonContainer key;
+EventContainer events;
 
 
 void setup() {
@@ -324,23 +312,21 @@ void setup() {
   // randomSeed() will then shuffle the random function.
   randomSeed(analogRead(A0));
 
-  timer.add(new WatchdogTimer());
+  events.add(new WatchdogTimer());
   LedTimer* led = new LedTimer();
-  timer.add(led);
+  events.add(led);
   JiggleTimer* jiggle = new JiggleTimer();
-  timer.add(jiggle);
+  events.add(jiggle);
   JiggleIntervalTimer* jiggle_interval = new JiggleIntervalTimer(led, jiggle);
-  timer.add(jiggle_interval);
-  timer.add(new CheckBatteryTimer());
-  timer.setup();
-  key.add(new BootselButton(jiggle_interval));
-  key.setup();
+  events.add(jiggle_interval);
+  events.add(new CheckBatteryTimer());
+  events.add(new BootselButton(jiggle_interval));
+  events.setup();
   Serial.println("Start Mouse Jiggle");
 
   led->run_now(3);
 }
 
 void loop() {
-  timer.run();
-  key.run();
+  events.run();
 }
