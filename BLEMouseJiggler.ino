@@ -13,7 +13,7 @@
 #define WATCHDOG_TIMEOUT 5000
 #define LED_TIMEOUT 500
 #define JIGGLE_TIMEOUT_HIGH 240000
-#define CHECKBATTERY_TIMEOUT 60000
+#define SET_BATTERY_TIMEOUT 60000
 
 // 50%: 3.65v, 40%: 3.28v, 30%: 2.91v, 20%: 2.54v, 10%: 2.17v, 5%: 1.99v
 #define HIGH_VOLTAGE 5.5
@@ -29,6 +29,26 @@ class Event {
 public:
   virtual void setup() = 0;
   virtual void run(unsigned long curr) = 0;
+};
+
+class EventContainer {
+public:
+  void add(Event* t) {
+    container.push_back(t);
+  }
+  void setup() {
+    for (Event* t : container) {
+      t->setup();
+    }
+  }
+  void run() {
+    unsigned long curr = millis();
+    for (Event* t : container) {
+      t->run(curr);
+    }
+  }
+private:
+  std::vector<Event*> container;
 };
 
 class Timer : public Event {
@@ -55,22 +75,22 @@ private:
 class Button : public Event {
 public:
   Button()
-    : key_down(0), timeout(BUTTON_TIMEOUT), last_time(0) {}
+    : count(0), timeout(BUTTON_TIMEOUT), last_time(0) {}
   virtual void setup() {
     _setup();
   }
   virtual void run(unsigned long curr) {
     if (_keydown()) {
       if ((curr - last_time) > timeout) {
-        key_down++;
+        count++;
         timeout += BUTTON_TIMEOUT;
       }
     } else {
-      if (key_down > 0) {
+      if (count > 0) {
         // key up
-        _run(key_down);
+        _run(count);
         timeout = BUTTON_TIMEOUT;
-        key_down = 0;
+        count = 0;
       }
       last_time = curr;
     }
@@ -78,31 +98,11 @@ public:
 protected:
   virtual void _setup() = 0;
   virtual bool _keydown() = 0;
-  virtual void _run(unsigned int key_down) = 0;
+  virtual void _run(unsigned int count) = 0;
 private:
-  unsigned int key_down;
+  unsigned int count;
   unsigned long timeout;
   unsigned long last_time;
-};
-
-class EventContainer {
-public:
-  void add(Event* t) {
-    container.push_back(t);
-  }
-  void setup() {
-    for (Event* t : container) {
-      t->setup();
-    }
-  }
-  void run() {
-    unsigned long curr = millis();
-    for (Event* t : container) {
-      t->run(curr);
-    }
-  }
-private:
-  std::vector<Event*> container;
 };
 
 class WatchdogTimer : public Timer {
@@ -211,19 +211,17 @@ private:
 // Pin used for ADC 0
 #define PICO_FIRST_ADC_PIN 26
 
-class CheckBatteryTimer : public Timer {
+class SetBatteryTimer : public Timer {
 protected:
   virtual void _setup() {
     timeout = RUN_NOW;
   }
   virtual void _run() {
-    timeout = CHECKBATTERY_TIMEOUT;
-    check_battery();
+    timeout = SET_BATTERY_TIMEOUT;
+    set_battery();
   }
 private:
-  void check_battery() {
-    bool powered = cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN);
-
+  float voltage() {
     cyw43_thread_enter();
     // Make sure cyw43 is awake
     cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN);
@@ -256,11 +254,23 @@ private:
     cyw43_thread_exit();
 
     const float conversion_factor = 3.3f / (1 << 12);
-    float voltage = vsys * 3 * conversion_factor;
+    float vol = vsys * 3 * conversion_factor;
 
-    float percent = 0;
-    if (voltage > 1.8) {
-      percent = (voltage - LOW_VOLTAGE) * 100 / (HIGH_VOLTAGE - LOW_VOLTAGE);
+    return vol;
+  }
+
+  bool powered_battery() {
+    return cyw43_arch_gpio_get(CYW43_WL_GPIO_VBUS_PIN);
+  }
+
+  void set_battery() {
+    bool powered = powered_battery();
+
+    float vol = voltage();
+
+    float percent = 0.0;
+    if (vol > 1.8) {
+      percent = (vol - LOW_VOLTAGE) * 100 / (HIGH_VOLTAGE - LOW_VOLTAGE);
     }
     if (percent > 100.0) {
       percent = 100.0;
@@ -268,7 +278,7 @@ private:
 
     Serial.printf("%s (voltage %.1fv, %.1f%%)\n",
                   powered ? "Powered" : "Battery",
-                  voltage,
+                  vol,
                   percent);
 
     MouseBLE.setBattery(percent);
@@ -284,9 +294,10 @@ protected:
   virtual bool _keydown() {
     return BOOTSEL;
   }
-  virtual void _run(unsigned int key_down) {
-    Serial.printf("Bootsel button pressed (%.dms)\n", key_down * BUTTON_TIMEOUT);
-    if (key_down >= (5000 / BUTTON_TIMEOUT)) {
+  virtual void _run(unsigned int count) {
+    unsigned long ms = count * BUTTON_TIMEOUT;
+    Serial.printf("Bootsel button pressed (%.dms)\n", ms);
+    if (ms >= 5000) {
       Serial.flush();
       rp2040.rebootToBootloader();
     } else {
@@ -319,7 +330,7 @@ void setup() {
   events.add(jiggle);
   JiggleIntervalTimer* jiggle_interval = new JiggleIntervalTimer(led, jiggle);
   events.add(jiggle_interval);
-  events.add(new CheckBatteryTimer());
+  events.add(new SetBatteryTimer());
   events.add(new BootselButton(jiggle_interval));
   events.setup();
   Serial.println("Start Mouse Jiggle");
